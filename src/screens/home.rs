@@ -1,29 +1,25 @@
-//! The drop zone, set as a spread: the headline and the index on the left,
-//! the plate awaiting material on the right. Nothing runs from here: a
-//! dropped clip goes to review. If ffmpeg is missing, a footnote along the
-//! bottom says how to get it, and goes once it's installed.
+//! The desk: what Compressy is and how it goes, on the left; a window to
+//! drop a video in, on the right. Nothing runs from here: a dropped clip
+//! goes to review. If ffmpeg is missing, a note above the footer says how
+//! to get it, and goes once it's installed.
 use crate::{
     App, menu, native,
     tools::Tools,
     ui::{
-        controls::{
-            Tone, aside, button_with, command, crop_marks, display, label, label_grid, pulse,
-        },
+        controls::{Tone, aside, button_with, command, display, label, numbered, pulse, window},
+        dither,
         motion::HOVER_FADE,
-        theme::{
-            ACCENT, DISPLAY, INK, ON_INK, PAPER_DEEP, TEXT, TEXT_FAINT, TEXT_MUTED, glyph, ink,
-            mix, size, weight,
-        },
+        theme::{ACCENT, INK, MONO, PAPER, TEXT, TEXT_MUTED, glyph, size, weight},
     },
 };
 use std::time::Duration;
-use zgui::{compose::prelude::*, layout::Length, timer::sleep};
+use zgui::{compose::prelude::*, reactive::Signal, timer::sleep};
 
 pub fn view(app: &App) -> View {
     let app = app.clone();
     component(move |cx| {
-        // Watch for ffmpeg being installed: cheap, it only checks
-        // which executables exist.
+        // Watch for ffmpeg being installed: cheap, it only checks which
+        // executables exist.
         let tools = app.tools.clone();
         cx.tasks().spawn(async move {
             loop {
@@ -33,218 +29,193 @@ pub fn view(app: &App) -> View {
                 }
             }
         });
+        // The little guy blinks now and then.
+        let blink = app.runtime.signal(false);
+        let eyes = blink.clone();
+        cx.tasks().spawn(async move {
+            loop {
+                sleep(Duration::from_millis(4200)).await;
+                eyes.set(true);
+                sleep(Duration::from_millis(140)).await;
+                eyes.set(false);
+            }
+        });
         let entrance = app.anim.entrance();
-        let which = app.tools.clone();
-        let bar_app = app.clone();
+        let (which, note_app) = (app.tools.clone(), app.clone());
         column()
             .w_full()
             .h_full()
-            .relative()
+            .px(40.)
             .reactive_style(move || {
                 let t = entrance();
-                Styles::new().opacity(t).translate(0., 10. * (1. - t))
+                Styles::new().opacity(t).translate(0., 8. * (1. - t))
             })
             .child(
                 row()
                     .w_full()
                     .grow()
                     .min_h(0.)
-                    .pl(48.)
-                    .pr(64.)
-                    .pt(18.)
-                    .pb(36.)
-                    .gap(56.)
+                    .pt(10.)
+                    .pb(28.)
+                    .gap(48.)
                     .items_stretch()
-                    .child(spread())
-                    .child(plate(&app)),
+                    .child(about(blink))
+                    .child(drop_window(&app).grow().min_w(0.)),
             )
-            .child(vertical_caption(
-                "Collection automne–hiver · MMXXVI · Compression",
-            ))
             .child(
                 switch(
-                    move || {
-                        which.with(|t| {
-                            if t.has_ffmpeg() {
-                                Missing::Nothing
-                            } else {
-                                Missing::Ffmpeg {
-                                    brew: t.brew.is_some(),
-                                }
-                            }
-                        })
-                    },
+                    move || which.with(|t| (!t.has_ffmpeg()).then_some(t.brew.is_some())),
                     move |missing, _| match missing {
-                        Missing::Ffmpeg { brew } => ffmpeg_note(&bar_app, brew),
-                        Missing::Nothing => div(),
+                        Some(brew) => ffmpeg_note(&note_app, brew),
+                        None => div(),
                     },
                 )
                 .w_full()
                 .shrink_0(),
             )
+            .child(footer())
     })
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Missing {
-    Ffmpeg { brew: bool },
-    Nothing,
-}
-
-/// The left page: the house's line, the headline (bold over hairline),
-/// the aside, and the house's label saying which step this is.
-fn spread() -> View {
+/// The left column, as solweb's front page: a kicker, the title and the
+/// little guy, an "About" box with its label set into the frame, and the
+/// steps.
+fn about(blink: Signal<bool>) -> View {
     column()
-        .w(400.)
+        .w(360.)
         .shrink_0()
-        .justify_between()
-        .child(label("Maison Compressy — atelier de compression"))
+        .gap(26.)
         .child(
-            column()
-                .child(display("Drop", 132., weight::BOLD))
-                .child(display("a film.", 132., weight::HAIR).ml(4.).mt(-30.))
+            row()
+                .w_full()
+                .pb(8.)
+                .border_edges(zgui::scene::Insets {
+                    top: 0.,
+                    right: 0.,
+                    bottom: 1.,
+                    left: 0.,
+                })
+                .border_color(INK)
+                .child(label("A small video compressor").grow())
+                .child(label("v0.1")),
+        )
+        .child(
+            row()
+                .items_end()
+                .gap(14.)
+                .child(display("make a small file", 30., weight::BOLD).text_wrap(true))
                 .child(
-                    aside("We take it in, quietly, and give it back lighter.", 19.)
-                        .mt(24.)
-                        .ml(8.)
-                        .max_w(270.),
+                    switch(move || blink.get(), |shut, _| dither::little_guy(shut, 3.))
+                        .shrink_0()
+                        .tooltip("hi"),
                 ),
         )
         .child(
-            row().gap(20.).items_end().child(label_grid(1)).child(
-                column()
-                    .gap(7.)
-                    .child(step(1, "Drop", true))
-                    .child(step(2, "Tune and crop", false))
-                    .child(step(3, "Compress", false)),
-            ),
+            column()
+                .relative()
+                .mt(4.)
+                .p(16.)
+                .pt(18.)
+                .border(1.)
+                .border_color(INK)
+                .child(
+                    row()
+                        .absolute()
+                        .left(12.)
+                        .top(-7.)
+                        .px(5.)
+                        .bg(PAPER)
+                        .child(label("About")),
+                )
+                .child(aside(
+                    "Drop a clip. Tune it against an estimate Compressy measures by \
+                     encoding samples, crop it if you like, then compress it with ffmpeg. \
+                     The original is never touched, and nothing leaves your Mac.",
+                    13.,
+                )),
+        )
+        .child(
+            column()
+                .gap(16.)
+                .child(step(1, "Drop", "a video, any video"))
+                .child(step(2, "Tune and crop", "against a measured estimate"))
+                .child(step(3, "Compress", "one ffmpeg pass, its log beside")),
         )
 }
 
-/// A line of the index beside the label: this step bold, the rest light.
-fn step(n: u8, name: &str, here: bool) -> View {
-    row()
-        .gap(10.)
-        .items_center()
-        .child(
-            text(format!("{n:02}"))
-                .font_family(crate::ui::theme::MONO)
-                .text_size(size::CAPTION)
-                .letter_spacing(1.)
-                .text_color(if here { ACCENT } else { TEXT_FAINT }),
-        )
-        .child(
-            text(name.to_uppercase())
-                .font_family(DISPLAY)
-                .font_weight(if here { weight::BOLD } else { weight::LIGHT })
-                .text_size(11.)
-                .letter_spacing(2.)
-                .text_color(if here { TEXT } else { TEXT_MUTED }),
-        )
+fn step(n: u8, name: &str, aside_text: &str) -> View {
+    column()
+        .gap(5.)
+        .child(numbered(n, name))
+        .child(aside(aside_text, 12.).pl(32.))
 }
 
-/// The plate: a matted frame with printer's marks, awaiting material. A
-/// file over the window floods it with ink.
-fn plate(app: &App) -> View {
-    let chooser = app.clone();
+/// The drop window: its desk a slow radial dither that thickens as a file
+/// comes over, the video glyph, what to do, and the open panel for those
+/// who'd rather not drag.
+fn drop_window(app: &App) -> View {
     let hover = {
         let (anim, tween) = (app.anim.clone(), app.drop_hover.clone());
         move || anim.tween(&tween, HOVER_FADE)
     };
-    let (mat, words, mark, rule) = (hover.clone(), hover.clone(), hover.clone(), hover);
+    let (field, words) = (hover.clone(), hover);
     let title = app.drop_hover.clone();
     let (error, shown) = (app.error.clone(), app.error.clone());
-    let mut frame = column()
+    let chooser = app.clone();
+    let inside = column()
         .w_full()
         .h_full()
         .relative()
         .items_center()
         .justify_center()
-        .border(1.)
-        .reactive_style(move || {
-            let t = mat();
-            Styles::new()
-                .bg(mix(PAPER_DEEP, INK, t))
-                .border_color(mix(ink(0.35), INK, t))
-        });
-    for m in crop_marks(ink(0.55)) {
-        frame = frame.child(m);
-    }
-    frame = frame
+        .gap(14.)
+        // The dither under it all, in steps of density, never grey.
         .child(
-            row()
+            div()
                 .absolute()
-                .left(18.)
-                .top(16.)
-                .child(
-                    text("PLATE I")
-                        .font_family(DISPLAY)
-                        .font_weight(weight::BOLD)
-                        .text_size(11.)
-                        .letter_spacing(3.),
-                )
-                .reactive_style({
-                    let t = mark.clone();
-                    move || Styles::new().text_color(mix(TEXT, ON_INK, t()))
-                }),
-        )
-        .child(
-            row()
-                .absolute()
-                .right(18.)
-                .top(19.)
-                .child(label("Awaiting material"))
-                .reactive_style({
-                    let t = mark.clone();
-                    move || Styles::new().opacity(1. - t())
+                .left(0.)
+                .top(0.)
+                .right(0.)
+                .bottom(0.)
+                .reactive_style(move || {
+                    let t = field();
+                    dither::radial(INK, 0.04 + 0.5 * t, 0.16 + 0.3 * t, 0.9, 2.)
                 }),
         )
         .child(
             column()
+                .relative()
                 .items_center()
-                .gap(16.)
+                .gap(12.)
+                .px(22.)
+                .py(18.)
+                .bg(PAPER)
+                .border(1.)
+                .border_color(INK)
                 .reactive_style(move || {
                     let t = words();
-                    Styles::new().text_color(mix(TEXT, ON_INK, t))
+                    Styles::new().translate(0., -3. * t)
                 })
-                .child(glyph("video", 26.))
+                .child(row().text_color(TEXT).child(glyph("video", 22.)))
                 .child(
                     text_signal(move || {
                         if title.with(|t| t.target > 0.5) {
-                            "“RELEASE”".into()
+                            "RELEASE TO OPEN".into()
                         } else {
-                            "“LAY THE MATERIAL HERE”".into()
+                            "DROP A VIDEO HERE".into()
                         }
                     })
-                    .font_family(DISPLAY)
-                    .font_weight(weight::HAIR)
-                    .text_size(30.)
-                    .letter_spacing(2.),
+                    .font_family(MONO)
+                    .text_size(15.)
+                    .font_weight(weight::BOLD)
+                    .letter_spacing(1.5)
+                    .text_color(TEXT),
                 )
-                .child(div().h(1.).reactive_style(move || {
-                    // The rule draws out as a file comes over.
-                    let t = rule();
-                    Styles::new().w(40. + 120. * t).bg(mix(ink(0.4), ON_INK, t))
-                }))
-                .child(
-                    text("MP4 · MOV · MKV · WEBM · GIF")
-                        .font_family(crate::ui::theme::MONO)
-                        .text_size(size::CAPTION)
-                        .letter_spacing(2.2)
-                        .reactive_style({
-                            let t = mark.clone();
-                            move || Styles::new().opacity(0.55 * (1. - t()))
-                        }),
-                )
-                // Or the native open panel, for those who'd rather not drag.
+                .child(label("MP4 · MOV · MKV · WEBM · GIF"))
                 .child(
                     button_with(Tone::Secondary, None, "Choose a file…")
-                        .mt(14.)
+                        .mt(4.)
                         .on_click(move || chooser.choose_file())
-                        .reactive_style({
-                            let t = mark;
-                            move || Styles::new().opacity(1. - t())
-                        })
                         .tooltip("Or press ⌘O"),
                 ),
         )
@@ -253,7 +224,7 @@ fn plate(app: &App) -> View {
                 .absolute()
                 .left(0.)
                 .right(0.)
-                .bottom(18.)
+                .bottom(14.)
                 .justify_center()
                 .reactive_style(move || {
                     if shown.with(String::is_empty) {
@@ -263,84 +234,89 @@ fn plate(app: &App) -> View {
                     }
                 })
                 .child(
-                    text_signal(move || error.get())
-                        .font_family(DISPLAY)
-                        .font_weight(weight::LIGHT)
-                        .text_size(15.)
-                        .text_color(ACCENT)
-                        .truncate(),
+                    row()
+                        .px(8.)
+                        .py(3.)
+                        .bg(PAPER)
+                        .border(1.)
+                        .border_color(ACCENT)
+                        .child(
+                            text_signal(move || error.get())
+                                .font_family(MONO)
+                                .text_size(size::XS)
+                                .text_color(TEXT)
+                                .truncate(),
+                        ),
                 ),
         );
-    // A right-click on the plate: AppKit's menu, to open one from there.
+    // A right-click on the window: AppKit's menu, to open one from there.
     let opens = app.active.clone();
-    let frame = native::context_menu(frame, app.window.clone(), move || {
+    let inside = native::context_menu(inside, app.window.clone(), move || {
         vec![native::entry(
             "Open…",
             menu::OPEN,
             opens.with(Option::is_none),
         )]
     });
-    column().grow().min_w(0.).py(22.).px(20.).child(frame)
+    column()
+        .h_full()
+        .pr(5.)
+        .pb(5.)
+        .child(window("Drop", None, inside).w_full().h_full())
 }
 
-/// A line of type turned up the right margin, as a magazine runs its folio.
-fn vertical_caption(s: &str) -> View {
-    // Rotation doesn't move layout: a fixed box, turned about its centre,
-    // set so its centre sits on the margin.
-    const W: f32 = 420.;
+/// The footer, as solweb's: a rule, then small mono notes.
+fn footer() -> View {
     row()
-        .absolute()
-        .right(18. - W / 2. + 6.)
-        .top(Length::Percent(0.5))
-        .w(W)
-        .h(12.)
-        .justify_center()
-        .translate(0., -40.)
-        .rotate(std::f32::consts::FRAC_PI_2)
-        .child(label(s))
-}
-
-/// A footnote along the bottom: a rule, *N.B.*, and what it's about.
-pub fn note(content: View) -> View {
-    column().mx(48.).mb(18.).child(div().h(1.).bg(INK)).child(
-        row()
-            .pt(12.)
-            .gap(16.)
-            .items_center()
-            .child(
-                text("N.B.")
-                    .font_family(DISPLAY)
-                    .font_weight(weight::BOLD)
-                    .text_size(18.)
-                    .text_color(ACCENT),
-            )
-            .child(content.grow().min_w(0.)),
-    )
+        .w_full()
+        .shrink_0()
+        .mb(14.)
+        .pt(10.)
+        .gap(18.)
+        .border_edges(zgui::scene::Insets {
+            top: 1.,
+            right: 0.,
+            bottom: 0.,
+            left: 0.,
+        })
+        .border_color(INK)
+        .child(label("Compressy").text_color(TEXT))
+        .child(label("Made with zgui"))
+        .child(label("Encodes with ffmpeg"))
+        .child(div().grow())
+        .child(label("Saved beside the original as name.compressed.mp4"))
 }
 
 /// ffmpeg is missing: the one command (Homebrew first, if that's missing
-/// too), a terminal to run it in, and a pulse saying the window is watching.
+/// too), a terminal to run it in, and a blinking dot saying the window is
+/// watching.
 fn ffmpeg_note(app: &App, brew: bool) -> View {
     let anim = app.anim.clone();
-    let mut content = row().gap(14.).items_center().child(
-        column()
+    let mut content = row()
+        .gap(12.)
+        .items_center()
+        .child(
+            row().px(5.).py(2.).bg(ACCENT).shrink_0().child(
+                text("NOTE")
+                    .font_family(MONO)
+                    .text_size(size::CAPTION)
+                    .font_weight(weight::BOLD)
+                    .text_color(PAPER),
+            ),
+        )
+        .child(
+            text(if brew {
+                "ffmpeg isn't installed. It does the encoding: run this, and Compressy wakes up."
+            } else {
+                "ffmpeg isn't installed. Get Homebrew first, then run this."
+            })
             .grow()
             .min_w(0.)
-            .gap(3.)
-            .child(label("ffmpeg is not installed"))
-            .child(
-                text(if brew {
-                    "It does the encoding. Run this, and the atelier opens."
-                } else {
-                    "It does the encoding. Homebrew first, then this."
-                })
-                .font_family(DISPLAY)
-                .font_weight(weight::LIGHT)
-                .text_size(15.)
-                .text_color(TEXT)
-                .truncate(),
-            ),
-    );
+            .font_family(crate::ui::theme::DISPLAY)
+            .text_size(size::BODY)
+            .text_color(TEXT_MUTED)
+            .truncate(),
+        );
     if !brew {
         content = content.child(
             button_with(Tone::Secondary, Some("arrow-up-right"), "brew.sh").on_click(|| {
@@ -350,10 +326,14 @@ fn ffmpeg_note(app: &App, brew: bool) -> View {
             }),
         );
     }
-    content = content
+    content
+        .mb(12.)
+        .p(10.)
+        .border(1.)
+        .border_color(INK)
         .child(
             row()
-                .w(240.)
+                .w(230.)
                 .shrink_0()
                 .child(command("brew install ffmpeg").w_full()),
         )
@@ -364,6 +344,5 @@ fn ffmpeg_note(app: &App, brew: bool) -> View {
                     .spawn();
             }),
         )
-        .child(pulse(&anim, ACCENT).tooltip("Watching for ffmpeg"));
-    note(content)
+        .child(pulse(&anim, ACCENT).tooltip("Watching for ffmpeg"))
 }

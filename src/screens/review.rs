@@ -12,13 +12,14 @@ use crate::{
     settings::{self, Audio, Codec, Crop, FrameRate, Resolution, Settings},
     ui::{
         controls::{
-            Segment, Tone, button_with, card, crop_marks, display, divider, label,
-            label_grid_small, numbered, pulse, segmented,
+            Segment, Tone, button_with, card, display, divider, label, meter, numbered, pulse,
+            segmented, steps, tag, window,
         },
+        dither,
         motion::{FADE_IN, Tween},
         theme::{
-            ACCENT, DISPLAY, INK, MONO, PAPER, PAPER_DEEP, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING,
-            alpha, glyph, icon, ink, size, weight,
+            ACCENT, DISPLAY, INK, MONO, PAPER, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING, alpha, glyph,
+            ink, size, weight,
         },
     },
 };
@@ -48,14 +49,7 @@ pub fn header(app: &App, review: Review) -> View {
         .min_w(0.)
         .gap(14.)
         .items_center()
-        .child(
-            text("FIG. 01")
-                .font_family(DISPLAY)
-                .font_weight(weight::BOLD)
-                .text_size(12.)
-                .letter_spacing(2.4)
-                .text_color(ACCENT),
-        )
+        .child(tag("Fig. 1"))
         .child(
             column()
                 .grow()
@@ -85,7 +79,7 @@ pub fn header(app: &App, review: Review) -> View {
                     .truncate(),
                 ),
         )
-        .child(label_grid_small(2))
+        .child(steps(2))
         .child(
             button_with(Tone::Ghost, Some("close"), "Cancel")
                 .on_click(move || {
@@ -202,8 +196,8 @@ fn failed(error: String) -> View {
         .w(PANEL)
         .p(18.)
         .gap(10.)
-        .child(label("Unreadable"))
-        .child(display("This material won't take.", 26., weight::LIGHT).text_wrap(true))
+        .child(tag("Unreadable"))
+        .child(display("Compressy can't read this one.", 18., weight::BOLD).text_wrap(true))
         .child(
             text(error)
                 .font_family(MONO)
@@ -221,9 +215,13 @@ fn reading(app: &App, review: &Review) -> View {
         .h_full()
         .gap(10.)
         .child(div().h(30.))
-        .child(plate(stage_box().items_center().justify_center().child(
-            chip(Some(pulse(&app.anim, ACCENT)), "Reading the material"),
-        )))
+        .child(plate(
+            "Fig. 1".into(),
+            stage_box()
+                .items_center()
+                .justify_center()
+                .child(chip(Some(pulse(&app.anim, ACCENT)), "Reading the clip")),
+        ))
 }
 
 // Stage: the toolbar and the frame ---------------------------------------------
@@ -256,6 +254,7 @@ fn stage(
         (mode.clone(), app.clone(), review.clone(), info.clone());
     let (frame_draft, frame_aspect) = (draft.clone(), aspect.clone());
     let caption_mode = mode.clone();
+    let plate_title = format!("Fig. 1 — {}", crate::file_name(&review.input));
     // A right-click on the plate: AppKit's menu, with the Clip menu's
     // commands for the frame and the File menu's for the original.
     let (menu_mode, menu_settings) = (mode.clone(), app.settings.clone());
@@ -278,6 +277,7 @@ fn stage(
         .child(toolbar(app, &info, mode.clone(), aspect, draft))
         .child(native::context_menu(
             plate(
+                plate_title,
                 switch(
                     move || which.get(),
                     move |mode, cx| match mode {
@@ -308,14 +308,14 @@ fn caption(info: &Rc<ClipInfo>, mode: &Signal<Mode>) -> View {
     row()
         .h(22.)
         .shrink_0()
-        .px(22.)
+        .px(2.)
         .gap(10.)
         .items_center()
         .child(
-            text(format!("FIG. 01 · {}", info.summary()))
-                .font_family(DISPLAY)
-                .font_weight(weight::LIGHT)
-                .text_size(13.)
+            text(info.summary().to_uppercase())
+                .font_family(MONO)
+                .text_size(size::CAPTION)
+                .letter_spacing(1.)
                 .text_color(TEXT_MUTED),
         )
         .child(div().grow())
@@ -326,24 +326,21 @@ fn caption(info: &Rc<ClipInfo>, mode: &Signal<Mode>) -> View {
             })
             .font_family(MONO)
             .text_size(size::CAPTION)
-            .letter_spacing(2.)
+            .letter_spacing(1.)
             .text_color(TEXT_FAINT),
         )
 }
 
-/// The frame mounted as a plate: room around it for printer's marks.
-fn plate(inner: View) -> View {
-    let mut frame = column().w_full().h_full().relative();
-    for mark in crop_marks(ink(0.5)) {
-        frame = frame.child(mark);
-    }
+/// The frame in a little OS window, room left for its dithered shadow.
+fn plate(title: String, inner: View) -> View {
     column()
         .w_full()
         .grow()
         .min_h(0.)
-        .px(22.)
-        .py(20.)
-        .child(frame.child(inner))
+        .pt(4.)
+        .pr(5.)
+        .pb(9.)
+        .child(window(title, None, inner).w_full().h_full())
 }
 
 const ASPECTS: [(Option<f32>, &str); 5] = [
@@ -391,8 +388,7 @@ fn toolbar(
     row()
         .h(32.)
         .shrink_0()
-        .px(22.)
-        .gap(18.)
+        .gap(12.)
         .items_center()
         .child(modes)
         .child(div().grow())
@@ -500,14 +496,12 @@ fn stage_box() -> View {
         .h_full()
         .relative()
         .overflow_hidden()
-        .bg(PAPER_DEEP)
-        .border(1.)
-        .border_color(ink(0.35))
+        .bg(PAPER)
 }
 
 /// A paper label pinned over the plate.
 fn chip(lead: Option<View>, label: &str) -> View {
-    let mut c = row().h(22.).px(9.).gap(7.).items_center().bg(PAPER);
+    let mut c = row().h(20.).px(7.).gap(6.).items_center().bg(INK);
     if let Some(lead) = lead {
         c = c.child(lead);
     }
@@ -515,9 +509,8 @@ fn chip(lead: Option<View>, label: &str) -> View {
         text(label.to_uppercase())
             .font_family(MONO)
             .text_size(size::CAPTION)
-            .font_weight(500)
-            .letter_spacing(2.)
-            .text_color(TEXT),
+            .letter_spacing(0.8)
+            .text_color(PAPER),
     )
 }
 
@@ -640,14 +633,14 @@ fn compare(cx: &mut Context, app: &App, review: &Review, info: &Rc<ClipInfo>) ->
                 .absolute()
                 .left(14.)
                 .top(14.)
-                .child(chip(None, "Avant")),
+                .child(chip(None, "Before")),
         )
         .child(
             row()
                 .absolute()
                 .right(14.)
                 .top(14.)
-                .child(chip(None, "Après"))
+                .child(chip(None, "After"))
                 .reactive_style(move || {
                     if shown_chip.with(Option::is_some) {
                         Styles::new().flex()
@@ -880,7 +873,7 @@ fn crop_editor(
         let (frame, crop) = (frame.clone(), crop_rect.clone());
         div()
             .absolute()
-            .bg(alpha(INK, 0.62))
+            .style(dither::level(INK, 0.62, 1.))
             .reactive_style(move || {
                 let (f, c) = (frame(), crop());
                 let (x, y, w, h) = match side {
@@ -1161,8 +1154,7 @@ fn panel(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo>) -> Vi
             column()
                 .w_full()
                 .shrink_0()
-                .child(numbered(1, "Specification").pb(10.))
-                .child(div().h(1.).bg(INK))
+                .child(numbered(1, "Specification").pb(6.))
                 .child(setting("Quality", quality))
                 .child(divider())
                 .child(setting("Size", resolution))
@@ -1184,8 +1176,7 @@ fn panel(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo>) -> Vi
                     })
                     .pt(10.)
                     .font_family(DISPLAY)
-                    .font_weight(weight::LIGHT)
-                    .text_size(14.)
+                    .text_size(size::SM)
                     .line_height(19.)
                     .text_color(TEXT_MUTED)
                     .text_wrap(true),
@@ -1228,7 +1219,7 @@ fn copy_prompt(cx: &mut Context, app: &App) -> View {
     row().w_full().shrink_0().justify_end().child(
         button()
             .h(20.)
-            .px(0.)
+            .px(4.)
             .gap(6.)
             .rounded(0.)
             .border(0.)
@@ -1236,18 +1227,18 @@ fn copy_prompt(cx: &mut Context, app: &App) -> View {
             .items_center()
             .font_family(MONO)
             .text_size(size::CAPTION)
-            .letter_spacing(1.8)
+            .letter_spacing(1.)
             .text_color(TEXT_FAINT)
             .cursor(Cursor::Pointer)
-            .focus(|s| s)
-            .hover(|s| s.text_color(TEXT))
+            .focus(|s| s.outline(2., ACCENT).outline_offset(2.))
+            .hover(|s| s.bg(INK).text_color(PAPER))
             .accessible_label("Copy a prompt for an AI")
             .child(
                 switch(
                     move || mark.get(),
                     |done, _| {
                         if done {
-                            icon("check", 10., ACCENT)
+                            glyph("check", 10.)
                         } else {
                             glyph("copy", 10.)
                         }
@@ -1276,10 +1267,7 @@ fn copy_prompt(cx: &mut Context, app: &App) -> View {
 }
 
 fn text_view(s: &str) -> View {
-    text(s.to_owned())
-        .font_family(DISPLAY)
-        .font_weight(weight::LIGHT)
-        .text_size(18.)
+    text(s.to_owned()).font_family(MONO).text_size(14.)
 }
 
 /// The finer points, behind zgui's disclosure: a slider nudging the goal's
@@ -1324,14 +1312,7 @@ fn advanced(cx: &mut Context, app: &App) -> View {
                 row()
                     .gap(12.)
                     .items_center()
-                    .child(
-                        text("Fine-tune")
-                            .w(56.)
-                            .shrink_0()
-                            .font_family(DISPLAY)
-                            .font_weight(weight::LIGHT)
-                            .text_size(13.),
-                    )
+                    .child(label("Fine-tune").w(62.).shrink_0())
                     .child(
                         slider("Fine-tune quality", fine, -6.0..=6.0)
                             .step(1.)
@@ -1362,15 +1343,7 @@ fn setting(name: &str, control: View) -> View {
         .h(40.)
         .gap(12.)
         .items_center()
-        .child(
-            text(name.to_owned())
-                .w(62.)
-                .shrink_0()
-                .font_family(DISPLAY)
-                .font_weight(weight::LIGHT)
-                .text_size(15.)
-                .text_color(TEXT),
-        )
+        .child(label(name).w(62.).shrink_0())
         .child(row().grow().min_w(0.).child(control))
 }
 
@@ -1442,7 +1415,6 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                     },
                 )),
         )
-        .child(div().h(1.).bg(INK))
         .child(
             column()
                 .gap(12.)
@@ -1456,21 +1428,20 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                                 Est::Ready(e) => split_size(e.size).0,
                                 _ => "…".into(),
                             })
-                            .font_family(DISPLAY)
-                            .font_weight(weight::THIN)
-                            .text_size(64.)
-                            .line_height(66.)
-                            .letter_spacing(-1.),
+                            .font_family(MONO)
+                            .font_weight(weight::BOLD)
+                            .text_size(40.)
+                            .line_height(44.)
+                            .letter_spacing(-1.2),
                         )
                         .child(
                             text_signal(move || match est_unit.get() {
                                 Est::Ready(e) => split_size(e.size).1,
                                 _ => String::new(),
                             })
-                            .pb(8.)
-                            .font_family(DISPLAY)
-                            .font_weight(weight::LIGHT)
-                            .text_size(20.)
+                            .pb(6.)
+                            .font_family(MONO)
+                            .text_size(16.)
                             .text_color(TEXT_MUTED),
                         )
                         .child(div().grow())
@@ -1480,35 +1451,13 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                                 _ => None,
                             },
                             move |size, _| match size {
-                                Some(size) => badge(size, original).pb(10.),
+                                Some(size) => badge(size, original).mb(10.),
                                 None => div(),
                             },
                         )),
                 )
-                .child(
-                    div()
-                        .w_full()
-                        .h(3.)
-                        .relative()
-                        .child(
-                            div()
-                                .absolute()
-                                .left(0.)
-                                .right(0.)
-                                .top(1.)
-                                .h(1.)
-                                .bg(ink(0.2)),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left(0.)
-                                .top(0.)
-                                .h(3.)
-                                .bg(ACCENT)
-                                .reactive_style(move || Styles::new().w_percent(bar() * 100.)),
-                        ),
-                )
+                // The new size against the old: the meter's dither, solweb's bar.
+                .child(meter(bar, 12.))
                 .child(
                     row()
                         .child(
@@ -1516,7 +1465,7 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                                 .grow()
                                 .font_family(MONO)
                                 .text_size(size::CAPTION)
-                                .letter_spacing(2.)
+                                .letter_spacing(1.)
                                 .text_color(TEXT_FAINT),
                         )
                         .child(
@@ -1527,7 +1476,7 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                             })
                             .font_family(MONO)
                             .text_size(size::CAPTION)
-                            .letter_spacing(2.)
+                            .letter_spacing(1.)
                             .text_color(TEXT_FAINT),
                         ),
                 )
@@ -1550,15 +1499,14 @@ fn estimate_card(cx: &mut Context, app: &App, review: &Review, info: Rc<ClipInfo
                 _ => String::new(),
             })
             .font_family(DISPLAY)
-            .font_weight(weight::LIGHT)
-            .text_size(14.)
-            .line_height(19.)
+            .text_size(size::SM)
+            .line_height(18.)
             .text_color(TEXT_MUTED)
             .text_wrap(true),
         )
 }
 
-/// The saving, in oxblood.
+/// The saving, on an ink tag.
 fn badge(size: u64, original: u64) -> View {
     let ratio = size as f64 / original as f64;
     let shown = if ratio <= 1. {
@@ -1566,12 +1514,13 @@ fn badge(size: u64, original: u64) -> View {
     } else {
         format!("+{:.0}%", (ratio - 1.) * 100.)
     };
-    text(shown)
-        .font_family(DISPLAY)
-        .font_weight(weight::LIGHT)
-        .text_size(30.)
-        .letter_spacing(-0.6)
-        .text_color(ACCENT)
+    row().px(7.).py(3.).bg(INK).child(
+        text(shown)
+            .font_family(MONO)
+            .font_weight(weight::BOLD)
+            .text_size(16.)
+            .text_color(PAPER),
+    )
 }
 
 /// The sampled frames' score against the goal's bar.
@@ -1596,9 +1545,9 @@ fn score_row(metric: Metric, value: f64, goal: Goal) -> View {
         .child(label(name))
         .child(
             text(shown)
-                .font_family(DISPLAY)
-                .font_weight(weight::LIGHT)
-                .text_size(20.)
+                .font_family(MONO)
+                .font_weight(weight::BOLD)
+                .text_size(16.)
                 .text_color(if passes { TEXT } else { WARNING }),
         )
         .child(
@@ -1608,8 +1557,7 @@ fn score_row(metric: Metric, value: f64, goal: Goal) -> View {
                 format!("under {target}; raise the quality")
             })
             .font_family(DISPLAY)
-            .font_weight(weight::LIGHT)
-            .text_size(14.)
+            .text_size(size::SM)
             .text_color(TEXT_MUTED)
             .truncate(),
         )

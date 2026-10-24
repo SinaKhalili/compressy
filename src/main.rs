@@ -409,15 +409,9 @@ fn titlebar(app: App) -> View {
                         Styles::new().hidden()
                     }
                 })
-                // A house's logotype: bold capitals, spaced out.
-                .child(
-                    text("COMPRESSY")
-                        .font_family(theme::DISPLAY)
-                        .font_weight(theme::weight::BOLD)
-                        .text_size(13.)
-                        .letter_spacing(7.)
-                        .text_color(TEXT),
-                ),
+                // The wordmark, in the pixel font with its dithered shadow,
+                // as solweb draws its own.
+                .child(ui::dither::wordmark("COMPRESSY", 2.)),
         )
         .child(
             switch(

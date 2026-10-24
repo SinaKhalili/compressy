@@ -1,29 +1,34 @@
-//! Compressy's look: a maison's catalogue, set in sans alone. Bone paper and
-//! ink, one oxblood accent; Helvetica Neue at its extremes (hairline
-//! UltraLight against Bold) for display, Geist for reading, Geist Mono for
-//! the tiny tracked captions. No serifs, no italics; hairlines, sharp
-//! corners, no shadows. The structure
-//! (tokens, motion, kit) still follows zgui's `zeron` example.
+//! Compressy's look: smallfile. A calm 1-bit desk, after solweb.sina.town
+//! and smallfile.ca: paper and ink, one orange used only to point (focus,
+//! the live dot), mono capitals for labels, Helvetica for reading, and
+//! every tone made of dither, never of grey (see `dither`). Little OS
+//! windows hold the work. The structure (tokens, motion, kit) still follows
+//! zgui's `zeron` example.
 use std::{collections::HashMap, sync::Arc};
 use zgui::{compose::prelude::*, scene::Color, svg::SvgData};
 use zgui_desktop::FontData;
 
 // Tokens ----------------------------------------------------------------------
+//
+// solweb's: --paper #f3f2ec, --ink #0d0d0c, --soft #5f5e58, --hair #c9c7bd,
+// --accent #d9521f.
 
-/// Bone: the paper everything is printed on.
-pub const PAPER: Color = Color(241, 237, 228, 255);
-/// A deeper bone, for what sits under the paper (the plate's mat).
-pub const PAPER_DEEP: Color = Color(231, 226, 214, 255);
-/// Ink.
-pub const INK: Color = Color(20, 19, 17, 255);
+pub const PAPER: Color = Color(243, 242, 236, 255);
+/// The desk under windows: a breath deeper than paper.
+pub const PAPER_DEEP: Color = Color(234, 233, 226, 255);
+pub const INK: Color = Color(13, 13, 12, 255);
 pub const TEXT: Color = INK;
-pub const TEXT_MUTED: Color = Color(20, 19, 17, 160);
-pub const TEXT_FAINT: Color = Color(20, 19, 17, 105);
-/// Oxblood: the one colour. Selection, progress, the saving.
-pub const ACCENT: Color = Color(128, 20, 30, 255);
-pub const WARNING: Color = Color(160, 110, 20, 255);
-/// The dark of backstage (the terminal's drawer) and text on ink.
-pub const BACKSTAGE: Color = Color(16, 15, 14, 255);
+/// Secondary text (`--soft`).
+pub const TEXT_MUTED: Color = Color(95, 94, 88, 255);
+/// Tertiary text: between soft and hair.
+pub const TEXT_FAINT: Color = Color(140, 139, 131, 255);
+/// Hairlines between rows (`--hair`).
+pub const HAIR: Color = Color(201, 199, 189, 255);
+/// Orange: it only points. Focus, the live dot, a warning.
+pub const ACCENT: Color = Color(217, 82, 31, 255);
+pub const WARNING: Color = ACCENT;
+/// The log's dark (solweb's `pre`): ink, with paper on it.
+pub const BACKSTAGE: Color = INK;
 pub const ON_INK: Color = PAPER;
 
 /// `color` at `alpha` times its own alpha.
@@ -36,56 +41,30 @@ pub fn alpha(color: Color, alpha: f32) -> Color {
     )
 }
 
-/// `ink(a)`: ink at `a`, for rules and washes on paper.
+/// `ink(a)`: ink at `a`. Only for washes under the pointer; tones are dither.
 pub fn ink(a: f32) -> Color {
     alpha(INK, a)
 }
 
-/// sRGB lerp with premultiplied alpha (Zeron's `motion::mix`).
-pub fn mix(from: Color, to: Color, t: f32) -> Color {
-    let t = t.clamp(0., 1.);
-    let (fa, ta) = (f32::from(from.3) / 255., f32::from(to.3) / 255.);
-    let a = fa + (ta - fa) * t;
-    if a <= 0. {
-        return Color(0, 0, 0, 0);
-    }
-    let channel = |f: u8, c: u8| {
-        let premultiplied = f32::from(f) * fa + (f32::from(c) * ta - f32::from(f) * fa) * t;
-        (premultiplied / a).round().clamp(0., 255.) as u8
-    };
-    Color(
-        channel(from.0, to.0),
-        channel(from.1, to.1),
-        channel(from.2, to.2),
-        (a * 255.).round() as u8,
-    )
-}
-
 // Type ------------------------------------------------------------------------
 
+/// Geist, for zgui's own controls (checkbox labels, tooltips).
 pub const SANS: &str = "Geist";
+/// Labels, numbers, titles: mono, as solweb's `ui-monospace`.
 pub const MONO: &str = "Geist Mono";
-/// The display face: Helvetica Neue, which every Mac carries with its
-/// UltraLight and Bold.
+/// Reading text: Helvetica Neue, solweb's body fallback, on every Mac.
 pub const DISPLAY: &str = "Helvetica Neue";
 
-/// Display weights: the extremes are the voice.
 pub mod weight {
-    pub const HAIR: u16 = 100;
-    /// Numerals: a hair heavier, so a decimal point reads as one.
-    pub const THIN: u16 = 200;
-    pub const LIGHT: u16 = 300;
     pub const BOLD: u16 = 700;
 }
 
 pub mod size {
-    /// Museum-label captions.
-    pub const CAPTION: f32 = 9.5;
-    /// The house's label: the Margiela grid's numbers.
-    pub const TAG: f32 = 9.;
+    pub const CAPTION: f32 = 10.;
     pub const XS: f32 = 11.;
     pub const SM: f32 = 12.;
-    pub const LG: f32 = 13.;
+    pub const BODY: f32 = 13.;
+    pub const LG: f32 = 14.;
 }
 
 /// The title bar strip, under the traffic lights.

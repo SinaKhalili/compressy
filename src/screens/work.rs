@@ -1,8 +1,7 @@
-//! A clip being compressed. The plate is the stage: the frame under a
-//! vellum wash while the work goes on, with how far along it is; then the
-//! frame bare, and a card pinned to it with what it came to. The terminal
-//! doing the work (ffmpeg and its log) is backstage, the coulisses,
-//! a dark bar along the bottom that opens into a drawer.
+//! A clip being compressed. Its frame, dithered to 1 bit, fills a window;
+//! over it a small dialog says how far along the encode is, then what it
+//! came to. ffmpeg's log is an ink bar along the bottom that opens into a
+//! drawer.
 use crate::{
     Active, App,
     clip::clock,
@@ -10,13 +9,12 @@ use crate::{
     menu, native,
     review::Pic,
     ui::{
-        controls::{
-            Tone, button_with, crop_marks, display, label, label_grid_small, numbered, pulse,
-        },
+        controls::{Tone, aside, button_with, label, meter, pulse, steps, tag, window},
+        dither,
         motion::{Spec, Tween},
         theme::{
-            ACCENT, BACKSTAGE, DISPLAY, INK, MONO, ON_INK, PAPER, PAPER_DEEP, TEXT_FAINT,
-            TEXT_MUTED, alpha, glyph, ink, size, weight,
+            ACCENT, BACKSTAGE, INK, MONO, ON_INK, PAPER, TEXT, TEXT_FAINT, TEXT_MUTED, alpha,
+            glyph, size, weight,
         },
     },
 };
@@ -162,7 +160,7 @@ pub fn view(app: &App, active: Active) -> View {
             });
             cx.retain(effect);
         }
-        // For zgui's progress bar in the coulisses: the fraction encoded, or
+        // For zgui's progress bar in the log's bar: the fraction encoded, or
         // NaN (indeterminate) until ffmpeg reports.
         let fraction = cx.state(f32::NAN);
         {
@@ -195,80 +193,60 @@ pub fn view(app: &App, active: Active) -> View {
 // Stage -----------------------------------------------------------------------
 
 fn stage(app: &App, active: &Active) -> View {
-    let phase = {
+    let which = {
         let p = active.progress.clone();
         move || p.with(Progress::phase)
     };
-    let (vellum, which) = (phase.clone(), phase);
-    let (window, active_progress, active_log) = (
+    let (window_handle, active_progress, active_log) = (
         app.window.clone(),
         active.progress.clone(),
         active.log.clone(),
     );
+    let title = format!("Fig. 1 — {}", crate::file_name(&active.job.input));
     let (app, active) = (app.clone(), active.clone());
-    let preview = active.preview.clone();
-    let mut frame = column()
+    // The frame as a 1-bit plate: Atkinson-dithered, ink on paper, in cells
+    // of four pixels.
+    let plate = active
+        .preview
+        .as_ref()
+        .map(|Pic(image)| dither::atkinson(image.pixels(), image.width(), image.height(), 4));
+    let inside = column()
         .w_full()
         .h_full()
         .relative()
-        .bg(PAPER_DEEP)
-        .border(1.)
-        .border_color(ink(0.35));
-    for mark in crop_marks(ink(0.5)) {
-        frame = frame.child(mark);
-    }
-    let frame = frame.child(
-        column()
-            .w_full()
-            .h_full()
-            .overflow_hidden()
-            .relative()
-            .child(
-                row()
-                    .absolute()
-                    .left(0.)
-                    .top(0.)
-                    .right(0.)
-                    .bottom(0.)
-                    .items_center()
-                    .justify_center()
-                    .child(match preview {
-                        Some(Pic(image)) => zgui::compose::image("Frame", image)
-                            .w_full()
-                            .h_full()
-                            .object_contain(),
-                        None => div(),
-                    }),
-            )
-            // Vellum over the frame while the work goes on.
-            .child(
-                div()
-                    .absolute()
-                    .left(0.)
-                    .top(0.)
-                    .right(0.)
-                    .bottom(0.)
-                    .bg(alpha(PAPER, 0.86))
-                    .reactive_style(move || {
-                        Styles::new().opacity(match vellum() {
-                            Phase::Done(_) => 0.,
-                            _ => 1.,
-                        })
-                    }),
-            )
-            .child(
-                switch(which, move |phase, _| match phase {
-                    Phase::Working => encoding(&active),
-                    Phase::Done(size) => done(&app, &active, size),
-                    Phase::Failed => failed(&app, &active),
-                })
+        .overflow_hidden()
+        .bg(PAPER)
+        .child(
+            row()
                 .absolute()
                 .left(0.)
                 .top(0.)
                 .right(0.)
-                .bottom(0.),
-            ),
-    );
+                .bottom(0.)
+                .items_center()
+                .justify_center()
+                .child(match plate {
+                    Some(image) => zgui::compose::image("Frame, dithered", image)
+                        .w_full()
+                        .h_full()
+                        .object_contain(),
+                    None => dither::patch(dither::level(INK, 0.12, 2.))
+                        .w_full()
+                        .h_full(),
+                }),
+        )
+        .child(
+            switch(which, move |phase, _| match phase {
+                Phase::Working => encoding(&active),
+                Phase::Done(size) => done(&app, &active, size),
+                Phase::Failed => failed(&app, &active),
+            })
+            .absolute()
+            .left(0.)
+            .top(0.)
+            .right(0.)
+            .bottom(0.),
+        );
     // A right-click on the plate: AppKit's menu, the result's commands
     // first once there is one.
     let (progress, log) = (active_progress, active_log);
@@ -281,31 +259,46 @@ fn stage(app: &App, active: &Active) -> View {
             native::entry("Reveal Original in Finder", menu::REVEAL_ORIGINAL, true),
             native::entry("Copy Original's Path", menu::COPY_PATH, true),
             AppMenuEntry::Separator,
-            native::entry("Coulisses", menu::COULISSES, true).checked(log.get()),
+            native::entry("Log", menu::COULISSES, true).checked(log.get()),
         ]
     };
     column()
         .w_full()
         .grow()
         .min_h(0.)
-        .pl(48.)
-        .pr(48.)
-        .pt(22.)
-        .pb(26.)
-        .child(native::context_menu(frame, window, plate_menu))
+        .px(40.)
+        .pt(8.)
+        .pb(22.)
+        .child(
+            column().w_full().h_full().pr(5.).pb(5.).child(
+                window(
+                    title,
+                    None,
+                    native::context_menu(inside, window_handle, plate_menu),
+                )
+                .w_full()
+                .h_full(),
+            ),
+        )
 }
 
-/// A centred column over the frame.
-fn overlay() -> View {
+/// A small window in the middle of the plate.
+fn dialog(title: &str, close: Option<Box<dyn Fn()>>, body: View) -> View {
     column()
         .w_full()
         .h_full()
         .items_center()
         .justify_center()
-        .gap(14.)
+        .child(
+            column()
+                .w(400.)
+                .pr(5.)
+                .pb(5.)
+                .child(window(title, close, body.p(18.).gap(12.)).w_full()),
+        )
 }
 
-/// The preset: how much is made, how fast, how long to go.
+/// How much is encoded, how fast, how long to go.
 fn encoding(active: &Active) -> View {
     let (big, bar, line) = (
         active.progress.clone(),
@@ -313,80 +306,57 @@ fn encoding(active: &Active) -> View {
         active.progress.clone(),
     );
     let duration = active.job.duration;
-    overlay()
-        .child(numbered(3, "Compression en cours"))
-        .child(
-            row()
-                .items_start()
-                .child(
-                    text_signal(move || {
-                        let f = big.with(|p| p.fraction.unwrap_or(0.));
-                        format!("{:.0}", f * 100.)
+    dialog(
+        "Compressing",
+        None,
+        column()
+            .child(
+                row()
+                    .items_end()
+                    .gap(6.)
+                    .child(
+                        text_signal(move || {
+                            let f = big.with(|p| p.fraction.unwrap_or(0.));
+                            format!("{:.0}", f * 100.)
+                        })
+                        .font_family(MONO)
+                        .font_weight(weight::BOLD)
+                        .text_size(56.)
+                        .line_height(58.)
+                        .letter_spacing(-2.),
+                    )
+                    .child(
+                        text("%")
+                            .pb(9.)
+                            .font_family(MONO)
+                            .font_weight(weight::BOLD)
+                            .text_size(22.)
+                            .text_color(TEXT_MUTED),
+                    ),
+            )
+            .child(meter(move || bar.with(|p| p.fraction.unwrap_or(0.)), 14.))
+            .child(
+                text_signal(move || {
+                    line.with(|p| {
+                        let mut parts =
+                            vec![format!("{} / {}", clock(p.out_time), clock(duration))];
+                        if let Some(speed) = p.speed.filter(|s| *s > 0.) {
+                            parts.push(format!("{speed:.1}×"));
+                            let left = (duration - p.out_time).max(0.) / speed as f64;
+                            parts.push(format!("{} left", clock(left)));
+                        }
+                        parts.join("  ·  ").to_uppercase()
                     })
-                    .font_family(DISPLAY)
-                    .font_weight(weight::THIN)
-                    .text_size(168.)
-                    .line_height(160.)
-                    .letter_spacing(-6.),
-                )
-                .child(
-                    text("%")
-                        .mt(22.)
-                        .ml(6.)
-                        .font_family(DISPLAY)
-                        .font_weight(weight::LIGHT)
-                        .text_size(48.)
-                        .text_color(ACCENT),
-                ),
-        )
-        .child(
-            div()
-                .w(440.)
-                .h(3.)
-                .relative()
-                .child(
-                    div()
-                        .absolute()
-                        .left(0.)
-                        .right(0.)
-                        .top(1.)
-                        .h(1.)
-                        .bg(ink(0.25)),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(0.)
-                        .top(0.)
-                        .h(3.)
-                        .bg(ACCENT)
-                        .reactive_style(move || {
-                            let f = bar.with(|p| p.fraction.unwrap_or(0.));
-                            Styles::new().w_percent(f * 100.)
-                        }),
-                ),
-        )
-        .child(
-            text_signal(move || {
-                line.with(|p| {
-                    let mut parts = vec![format!("{} / {}", clock(p.out_time), clock(duration))];
-                    if let Some(speed) = p.speed.filter(|s| *s > 0.) {
-                        parts.push(format!("{speed:.1}×"));
-                        let left = (duration - p.out_time).max(0.) / speed as f64;
-                        parts.push(format!("{} remaining", clock(left)));
-                    }
-                    parts.join("   —   ").to_uppercase()
                 })
-            })
-            .mt(4.)
-            .font_family(MONO)
-            .text_size(size::CAPTION)
-            .letter_spacing(2.2)
-            .text_color(TEXT_MUTED),
-        )
+                .font_family(MONO)
+                .text_size(size::CAPTION)
+                .letter_spacing(1.)
+                .text_color(TEXT_MUTED),
+            ),
+    )
 }
 
-/// What it came to, on a card pinned to the bare frame, with what next.
+/// What it came to, before and after, and what next.
 fn done(app: &App, active: &Active, size: u64) -> View {
     let original = active.job.original_size.max(1);
     let ratio = size as f64 / original as f64;
@@ -395,136 +365,112 @@ fn done(app: &App, active: &Active, size: u64) -> View {
     } else {
         format!("+{:.0}%", (ratio - 1.) * 100.)
     };
-    let shown = human_size(size);
-    let (number, unit) = shown.split_once(' ').unwrap_or((&shown, ""));
-    let entrance = app.anim.entrance();
     let (play, reveal) = (active.job.output.clone(), active.job.output.clone());
-    let leave = app.clone();
-    column()
-        .w_full()
-        .h_full()
-        .justify_end()
-        .items_start()
-        .p(22.)
-        .child(
-            column()
-                .p(22.)
-                .gap(4.)
-                .bg(PAPER)
-                .border(1.)
-                .border_color(INK)
-                .reactive_style(move || {
-                    let t = entrance();
-                    Styles::new().opacity(t).translate(0., 16. * (1. - t))
-                })
-                .child(numbered(4, "Livré"))
-                .child(
-                    row()
-                        .mt(6.)
-                        .gap(12.)
-                        .items_end()
-                        .child(
-                            text(number.to_owned())
-                                .font_family(DISPLAY)
-                                .font_weight(weight::THIN)
-                                .text_size(88.)
-                                .line_height(84.)
-                                .letter_spacing(-3.),
-                        )
-                        .child(
-                            text(unit.to_owned())
-                                .pb(12.)
-                                .font_family(DISPLAY)
-                                .font_weight(weight::LIGHT)
-                                .text_size(24.)
-                                .text_color(TEXT_MUTED),
-                        )
-                        .child(
-                            text(saving)
-                                .pb(10.)
-                                .ml(10.)
-                                .font_family(DISPLAY)
-                                .font_weight(weight::LIGHT)
-                                .text_size(40.)
-                                .text_color(ACCENT),
-                        ),
-                )
-                .child(
-                    text(if ratio <= 1. {
-                        format!("from {}.", human_size(original))
-                    } else {
-                        format!(
-                            "from {}: it was already well made; try a lower quality.",
-                            human_size(original)
-                        )
-                    })
-                    .font_family(DISPLAY)
-                    .font_weight(weight::LIGHT)
-                    .text_size(16.)
-                    .text_color(TEXT_MUTED),
-                )
-                .child(
-                    row()
-                        .mt(14.)
-                        .gap(10.)
-                        .child(
-                            button_with(Tone::Primary, None, "View")
-                                .on_click(move || {
-                                    let _ = std::process::Command::new("open").arg(&play).spawn();
-                                })
-                                .tooltip("Open the result"),
-                        )
-                        .child(
-                            button_with(Tone::Secondary, None, "Reveal")
-                                .on_click(move || {
-                                    let _ = std::process::Command::new("open")
-                                        .arg("-R")
-                                        .arg(&reveal)
-                                        .spawn();
-                                })
-                                .tooltip("Show it in Finder"),
-                        )
-                        .child(
-                            button_with(Tone::Ghost, None, "Another")
-                                .on_click(move || leave.close_clip())
-                                .tooltip("Close the clip (⌘.)"),
-                        ),
-                ),
+    let (leave, closer) = (app.clone(), app.clone());
+    let stat = |name: &str, value: String| {
+        column().gap(3.).child(label(name)).child(
+            text(value)
+                .font_family(MONO)
+                .font_weight(weight::BOLD)
+                .text_size(22.)
+                .letter_spacing(-0.5)
+                .text_color(TEXT),
         )
+    };
+    dialog(
+        "Done",
+        Some(Box::new(move || closer.close_clip())),
+        column()
+            .child(
+                row()
+                    .gap(28.)
+                    .items_end()
+                    .child(stat("Before", human_size(original)))
+                    .child(stat("After", human_size(size)))
+                    .child(div().grow())
+                    .child(tag(&saving).mb(4.)),
+            )
+            .child(meter(move || ratio.min(1.) as f32, 10.))
+            .child(
+                text(if ratio <= 1. {
+                    format!(
+                        "Saved beside the original as {}.",
+                        crate::file_name(&active.job.output)
+                    )
+                } else {
+                    "It came out larger: the original was already well made. Try a lower \
+                     quality."
+                        .into()
+                })
+                .font_family(crate::ui::theme::DISPLAY)
+                .text_size(size::BODY)
+                .text_color(TEXT_MUTED)
+                .text_wrap(true),
+            )
+            .child(
+                row()
+                    .mt(6.)
+                    .gap(14.)
+                    .items_center()
+                    .child(
+                        button_with(Tone::Primary, None, "View")
+                            .on_click(move || {
+                                let _ = std::process::Command::new("open").arg(&play).spawn();
+                            })
+                            .tooltip("Open the result"),
+                    )
+                    .child(
+                        button_with(Tone::Secondary, None, "Reveal")
+                            .on_click(move || {
+                                let _ = std::process::Command::new("open")
+                                    .arg("-R")
+                                    .arg(&reveal)
+                                    .spawn();
+                            })
+                            .tooltip("Show it in Finder"),
+                    )
+                    .child(div().grow())
+                    .child(
+                        button_with(Tone::Ghost, None, "Another")
+                            .on_click(move || leave.close_clip())
+                            .tooltip("Close the clip (⌘.)"),
+                    ),
+            ),
+    )
 }
 
 fn failed(app: &App, active: &Active) -> View {
-    let (log, leave) = (active.log.clone(), app.clone());
-    let why = "ffmpeg set the work down. The coulisses, below, say why.";
-    overlay()
-        .child(numbered(3, "Interrompu"))
-        .child(display("UNFINISHED", 96., weight::HAIR))
-        .child(
-            text(why)
-                .font_family(DISPLAY)
-                .font_weight(weight::LIGHT)
-                .text_size(16.)
-                .text_color(TEXT_MUTED),
-        )
-        .child(
-            row()
-                .mt(10.)
-                .gap(10.)
-                .child(
-                    button_with(Tone::Secondary, None, "Open the coulisses").on_click(move || {
-                        log.set(true);
-                    }),
-                )
-                .child(
-                    button_with(Tone::Ghost, None, "Another").on_click(move || leave.close_clip()),
-                ),
-        )
+    let (log, leave, closer) = (active.log.clone(), app.clone(), app.clone());
+    dialog(
+        "Stopped",
+        Some(Box::new(move || closer.close_clip())),
+        column()
+            .child(aside(
+                "ffmpeg set the work down before it finished. The log below says why.",
+                size::BODY,
+            ))
+            .child(
+                row()
+                    .mt(4.)
+                    .gap(14.)
+                    .child(
+                        button_with(Tone::Primary, None, "Show log").on_click(move || {
+                            log.set(true);
+                        }),
+                    )
+                    .child(div().grow())
+                    .child(
+                        button_with(Tone::Ghost, None, "Another")
+                            .on_click(move || leave.close_clip()),
+                    ),
+            ),
+    )
 }
 
-// Coulisses -------------------------------------------------------------------
+// Log -------------------------------------------------------------------------
 
-/// Backstage: a dark bar along the bottom with what's running and its
-/// latest word, and the terminal itself, rising when opened.
+/// The log: an ink bar along the bottom, as solweb's `pre`, with what's
+/// running and its latest word; the terminal itself rises when opened.
 fn drawer(
     app: &App,
     active: &Active,
@@ -552,37 +498,34 @@ fn drawer(
         .bg(BACKSTAGE)
         .child(
             row()
-                .h(44.)
-                .pl(48.)
-                .pr(36.)
-                .gap(16.)
+                .h(34.)
+                .px(40.)
+                .gap(14.)
                 .items_center()
                 .cursor(zgui::cursor::Cursor::Pointer)
                 .on_click(toggle.clone())
                 .child(
-                    text("COULISSES")
-                        .font_family(DISPLAY)
+                    text("LOG")
+                        .font_family(MONO)
                         .font_weight(weight::BOLD)
-                        .text_size(11.)
-                        .letter_spacing(3.)
+                        .text_size(size::XS)
+                        .letter_spacing(1.2)
                         .text_color(ON_INK),
                 )
                 .child(
                     text("FFMPEG")
                         .font_family(MONO)
                         .text_size(size::CAPTION)
-                        .letter_spacing(2.2)
+                        .letter_spacing(1.)
                         .text_color(paper(0.55)),
                 )
-                // zgui's own progress bar: the share encoded, or moving
-                // without end until ffmpeg reports.
                 .child(theme_scope(
-                    // Paper on ink, in the dark bar: the track is the theme's
-                    // input colour, the fill the text colour.
+                    // Paper on ink: the track is the theme's input colour,
+                    // the fill the text colour.
                     zgui::theme::ThemeOverride::new()
                         .with(zgui::theme::tok::INPUT_BG, alpha(ON_INK, 0.14)),
                     zgui::compose::progress("Encoding", fraction)
-                        .w(120.)
+                        .w(110.)
                         .h(4.)
                         .text_color(ON_INK)
                         .shrink_0(),
@@ -611,23 +554,23 @@ fn drawer(
                     .min_w(0.)
                     .font_family(MONO)
                     .text_size(size::XS)
-                    .text_color(paper(0.4))
+                    .text_color(paper(0.45))
                     .truncate(),
                 )
                 .child(
                     row()
                         .gap(8.)
                         .items_center()
-                        .text_color(paper(0.75))
+                        .text_color(paper(0.8))
                         .child(
-                            text("LOG")
+                            text("SHOW")
                                 .font_family(MONO)
                                 .text_size(size::CAPTION)
-                                .letter_spacing(2.2),
+                                .letter_spacing(1.),
                         )
                         .child(
                             row()
-                                .child(glyph("arrow-down", 12.))
+                                .child(glyph("arrow-down", 11.))
                                 .reactive_style(move || {
                                     // Up to open, down to close.
                                     Styles::new().rotate(std::f32::consts::PI * (1. - chevron()))
@@ -655,61 +598,47 @@ fn drawer(
 }
 
 /// The title bar while a clip is worked on: the figure, how it goes, the
-/// hand at work, a way out.
+/// steps, a way out.
 pub fn header(_cx: &mut Context, app: &App, active: Active) -> View {
     let leave = app.clone();
     let progress = active.progress.clone();
-    let (mark, hand) = (glyph("fast", 11.), "BY PRESET");
     row()
         .w_full()
         .min_w(0.)
-        .gap(14.)
+        .gap(12.)
         .items_center()
-        .child(
-            text("FIG. 01")
-                .font_family(DISPLAY)
-                .font_weight(weight::BOLD)
-                .text_size(12.)
-                .letter_spacing(2.4)
-                .text_color(ACCENT),
-        )
+        .child(tag("Fig. 1"))
         .child(
             column()
                 .grow()
                 .min_w(0.)
-                .gap(3.)
+                .gap(2.)
                 .child(
                     text(crate::file_name(&active.job.input))
-                        .text_size(size::LG)
-                        .font_weight(500)
+                        .font_family(crate::ui::theme::DISPLAY)
+                        .text_size(size::BODY)
+                        .font_weight(weight::BOLD)
+                        .text_color(TEXT)
                         .truncate(),
                 )
                 .child(
                     text_signal(move || {
                         progress.with(|p| match p.phase() {
                             Phase::Working => match p.fraction {
-                                Some(f) => format!("EN COURS — {:.0}%", f * 100.),
-                                None => "EN COURS".into(),
+                                Some(f) => format!("COMPRESSING · {:.0}%", f * 100.),
+                                None => "COMPRESSING".into(),
                             },
-                            Phase::Done(_) => "LIVRÉ".into(),
-                            Phase::Failed => "INTERROMPU".into(),
+                            Phase::Done(_) => "DONE".into(),
+                            Phase::Failed => "STOPPED".into(),
                         })
                     })
                     .font_family(MONO)
                     .text_size(size::CAPTION)
-                    .letter_spacing(1.8)
+                    .letter_spacing(1.)
                     .text_color(TEXT_FAINT),
                 ),
         )
-        .child(
-            row()
-                .gap(7.)
-                .items_center()
-                .text_color(TEXT_MUTED)
-                .child(mark)
-                .child(label(hand)),
-        )
-        .child(label_grid_small(3))
+        .child(steps(3))
         .child(
             button_with(Tone::Ghost, Some("close"), "Another")
                 .on_click(move || leave.close_clip())

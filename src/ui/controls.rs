@@ -1,26 +1,41 @@
 //! The pieces every screen shares, so the same thing looks the same
-//! everywhere (as zterm's `kit.luau`): buttons by tone, an editorial
-//! segmented control, hairline frames with printer's marks, captions and
-//! display type, a command to copy, a live pulse.
+//! everywhere (as zterm's `kit.luau`), in solweb's and smallfile's idiom:
+//! the default button with its ring, tabs that invert, numbered section
+//! heads over a dithered rule, little OS windows with striped title bars and
+//! dithered shadows, a dithered meter, a command to copy, a blinking dot.
 use super::{
+    dither,
     motion::Anim,
     theme::{
-        self, ACCENT, INK, ON_INK, PAPER, TEXT, TEXT_FAINT, TEXT_MUTED, glyph, icon, ink, size,
-        weight,
+        self, ACCENT, HAIR, INK, ON_INK, PAPER, TEXT, TEXT_FAINT, TEXT_MUTED, glyph, icon, ink,
+        size, weight,
     },
 };
-use std::{f32::consts::TAU, io::Write, process::Stdio, time::Duration};
+use std::{io::Write, process::Stdio, time::Duration};
 use zgui::{
     compose::prelude::*,
     cursor::Cursor,
     input::{EventPhase, FocusGroup, InputEvent},
-    scene::Color,
+    layout::Length,
+    scene::{BoxShadow, Color, Transform},
     semantics::Role,
     timer::sleep,
 };
 
-/// What a button does: `Primary` an ink block that turns oxblood under the
-/// pointer (the one thing to do), `Secondary` a hairline, `Ghost` words.
+/// A hard ring `spread` points out from the box (no blur, no offset).
+fn ring(color: Color, spread: f32) -> BoxShadow {
+    BoxShadow {
+        color,
+        offset: Transform { x: 0., y: 0. },
+        blur_radius: 0.,
+        spread,
+    }
+}
+
+/// What a button does. `Primary` is the default button (a paper gap, then
+/// an outer ink ring, as solweb's download and the Mac's ⏎ button), the one
+/// thing to do; `Secondary` a 2 pt box; `Ghost` a word that inverts under
+/// the pointer, as solweb's links.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tone {
     Primary,
@@ -28,44 +43,45 @@ pub enum Tone {
     Ghost,
 }
 
-/// A 32 pt button, square-cornered: an optional icon, then its label in
-/// tracked mono capitals.
+/// A square-cornered button: an optional icon, then its label in mono capitals.
 pub fn button_with(tone: Tone, icon_name: Option<&str>, label: &str) -> View {
     let mut b = button()
-        .h(32.)
-        .px(if tone == Tone::Ghost { 8. } else { 16. })
+        .h(30.)
+        .px(if tone == Tone::Ghost { 6. } else { 14. })
         .gap(8.)
         .rounded(0.)
         .items_center()
         .justify_center()
         .shrink_0()
         .font_family(theme::MONO)
-        .text_size(10.5)
-        .font_weight(500)
-        .letter_spacing(1.8)
+        .text_size(size::XS)
+        .font_weight(weight::BOLD)
+        .letter_spacing(1.1)
         .cursor(Cursor::Pointer)
-        .focus(|s| s)
-        .disabled_style(|s| s.opacity(0.3));
+        .focus(|s| s.outline(2., ACCENT).outline_offset(3.))
+        .disabled_style(|s| s.opacity(0.35));
     b = match tone {
         Tone::Primary => b
-            .bg(INK)
-            .text_color(ON_INK)
-            .border(0.)
-            .hover(|s| s.bg(ACCENT)),
-        Tone::Secondary => b
-            .bg(ink(0.))
+            .bg(PAPER)
             .text_color(TEXT)
-            .border(1.)
+            .border(2.)
             .border_color(INK)
-            .hover(|s| s.bg(ink(0.06))),
+            .shadows(vec![ring(PAPER, 2.), ring(INK, 3.)])
+            .hover(|s| s.bg(INK).text_color(ON_INK)),
+        Tone::Secondary => b
+            .bg(PAPER)
+            .text_color(TEXT)
+            .border(2.)
+            .border_color(INK)
+            .hover(|s| s.bg(INK).text_color(ON_INK)),
         Tone::Ghost => b
             .bg(ink(0.))
             .text_color(TEXT_MUTED)
             .border(0.)
-            .hover(|s| s.text_color(TEXT).text_underline(true)),
+            .hover(|s| s.bg(INK).text_color(ON_INK)),
     };
     if let Some(name) = icon_name {
-        b = b.child(glyph(name, 13.));
+        b = b.child(glyph(name, 12.));
     }
     if !label.is_empty() {
         b = b.child(text(label.to_uppercase()));
@@ -97,8 +113,8 @@ impl<T> Segment<T> {
     }
 }
 
-/// Options set like a catalogue's index: tracked capitals, the chosen one
-/// in ink over a rule, the rest faint. A radio group to assistive
+/// Options in a 1 pt box split by rules, as solweb's tabs: the chosen one
+/// inverted, the rest dotted under the pointer. A radio group to assistive
 /// technology, one Tab stop that the arrows move through (as zgui's own
 /// `segmented`). `shown` is the choice in effect (which `available` can make
 /// differ from the last pick); `pick` makes one. `fill` spreads the options
@@ -116,48 +132,44 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         .accessible_label(label.to_owned())
         .focus_group(FocusGroup::Horizontal)
         .shrink_0()
-        .gap(if fill { 4. } else { 18. });
+        .border(1.)
+        .border_color(INK);
     if fill {
         track = track.w_full();
     }
-    for option in options {
+    let count = options.len();
+    for (i, option) in options.into_iter().enumerate() {
         let v = option.value;
-        let (checked, styled, ruled, current) =
-            (shown.clone(), shown.clone(), shown.clone(), shown.clone());
+        let (checked, styled, current) = (shown.clone(), shown.clone(), shown.clone());
         let (can_click, can_focus, can_show) =
             (available.clone(), available.clone(), available.clone());
         let (on_click, on_focus) = (pick.clone(), pick.clone());
-        let mut face = row().gap(6.).items_center();
-        if let Some((name, tint)) = option.mark {
-            face = face.child(match tint {
-                Some(color) => icon(name, 11., color),
-                None => glyph(name, 11.),
-            });
-        }
-        face = face.child(text(option.label.to_uppercase()));
         let mut b = button()
             .role(Role::RadioButton)
             .checked_when(move || checked() == v)
             .disabled_when(move || !can_show(v))
-            .disabled_style(|s| s.opacity(0.28))
-            .h(28.)
-            .px(0.)
+            .disabled_style(|s| s.opacity(0.3))
+            .h(24.)
+            .px(if fill { 4. } else { 10. })
             .gap(5.)
             .rounded(0.)
             .border(0.)
-            .bg(ink(0.))
             .items_center()
             .justify_center()
             .font_family(theme::MONO)
-            .text_size(10.5)
-            .font_weight(500)
-            .letter_spacing(1.3)
+            .text_size(size::CAPTION)
+            .font_weight(weight::BOLD)
+            .letter_spacing(0.8)
             .cursor(Cursor::Pointer)
-            .focus(|s| s)
+            .focus(|s| s.outline(2., ACCENT).outline_offset(-4.))
             .reactive_style(move || {
-                Styles::new().text_color(if styled() == v { TEXT } else { TEXT_FAINT })
+                if styled() == v {
+                    Styles::new().bg(INK).text_color(ON_INK)
+                } else {
+                    Styles::new().bg(PAPER).text_color(TEXT)
+                }
             })
-            .hover(|s| s.text_color(TEXT))
+            .hover(|s| s.style(dither::level(ink(0.4), 0.25, 1.)))
             .on_click(move || {
                 if can_click(v) {
                     on_click(v);
@@ -172,146 +184,248 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 {
                     on_focus(v);
                 }
-            })
-            // The label over its rule, stacked in a column of their own
-            // (a button lays out in a row).
-            .child(column().w_full().gap(5.).items_start().child(face).child(
-                div().h(1.5).w_full().reactive_style(move || {
-                    Styles::new().bg(if ruled() == v { INK } else { ink(0.) })
-                }),
-            ));
+            });
+        if i + 1 < count {
+            b = b
+                .border_edges(zgui::scene::Insets {
+                    top: 0.,
+                    right: 1.,
+                    bottom: 0.,
+                    left: 0.,
+                })
+                .border_color(INK);
+        }
         if fill {
             b = b.flex_grow(1.).flex_basis(0.).min_w(0.);
         }
-        track = track.child(b);
+        if let Some((name, tint)) = option.mark {
+            b = b.child(match tint {
+                Some(color) => icon(name, 11., color),
+                None => glyph(name, 11.),
+            });
+        }
+        track = track.child(b.child(text(option.label.to_uppercase())));
     }
     track
 }
 
-/// A sheet: a hairline frame on the paper.
+/// A sheet: a 1 pt ink box on the paper.
 pub fn card() -> View {
-    column().border(1.).border_color(ink(0.16))
+    column().bg(PAPER).border(1.).border_color(INK)
 }
 
+/// A hairline between rows (`--hair`).
 pub fn divider() -> View {
-    div().h(1.).shrink_0().bg(ink(0.12))
+    div().h(1.).shrink_0().bg(HAIR)
 }
 
-/// A museum label: tiny mono capitals, tracked wide.
+/// A label: mono capitals, tracked, in the soft tone.
 pub fn label(s: &str) -> View {
     text(s.to_uppercase())
         .font_family(theme::MONO)
         .text_size(size::CAPTION)
-        .font_weight(500)
-        .letter_spacing(2.2)
-        .text_color(TEXT_FAINT)
+        .letter_spacing(1.)
+        .text_color(TEXT_MUTED)
 }
 
-/// `N°01 — LABEL`: a numbered section, as a catalogue numbers its looks.
+/// A tag: mono capitals on ink, as solweb's `.tag`.
+pub fn tag(s: &str) -> View {
+    row().px(5.).py(1.).bg(INK).shrink_0().child(
+        text(s.to_uppercase())
+            .font_family(theme::MONO)
+            .text_size(size::CAPTION)
+            .letter_spacing(0.6)
+            .text_color(ON_INK),
+    )
+}
+
+/// A section head, as solweb's `h2`: its number on ink, its name in bold
+/// capitals, then a dithered rule to the edge.
 pub fn numbered(n: u8, s: &str) -> View {
     row()
+        .w_full()
         .gap(10.)
         .items_center()
         .child(
-            text(format!("N°{n:02}"))
-                .font_family(theme::DISPLAY)
-                .font_weight(weight::BOLD)
-                .text_size(12.)
-                .text_color(ACCENT),
+            row().px(5.).py(2.).bg(INK).shrink_0().child(
+                text(format!("{n:02}"))
+                    .font_family(theme::MONO)
+                    .text_size(size::XS)
+                    .font_weight(weight::BOLD)
+                    .text_color(ON_INK),
+            ),
         )
-        .child(label(s))
+        .child(
+            text(s.to_uppercase())
+                .font_family(theme::MONO)
+                .text_size(size::XS)
+                .font_weight(weight::BOLD)
+                .letter_spacing(1.1)
+                .text_color(TEXT)
+                .shrink_0(),
+        )
+        .child(
+            dither::patch(dither::checker(INK))
+                .grow()
+                .h(6.)
+                .opacity(0.55),
+        )
 }
 
-/// Display type: Helvetica Neue at `weight`, set tight.
+/// A title: mono bold, set tight (solweb's `.title`).
 pub fn display(s: impl Into<String>, size: f32, weight: u16) -> View {
     text(s.into())
-        .font_family(theme::DISPLAY)
+        .font_family(theme::MONO)
         .font_weight(weight)
         .text_size(size)
-        .line_height(size * 1.12)
-        .letter_spacing(-size * 0.035)
+        .line_height(size * 1.15)
+        .letter_spacing(-size * 0.03)
         .text_color(TEXT)
 }
 
-/// Light reading type in the display face: asides, notes, captions.
+/// Reading text in Helvetica, the soft tone.
 pub fn aside(s: impl Into<String>, size: f32) -> View {
     text(s.into())
         .font_family(theme::DISPLAY)
-        .font_weight(weight::LIGHT)
         .text_size(size)
-        .line_height(size * 1.35)
+        .line_height(size * 1.6)
         .text_color(TEXT_MUTED)
         .text_wrap(true)
 }
 
-/// The house's label, after Margiela's: the numbers 0 to 23 on a white
-/// tag, `active` circled. Here it says which step this is.
-pub fn label_grid(active: u8) -> View {
-    tag(active, 17., size::TAG, 6.)
-}
-
-/// The label small enough for the title bar.
-pub fn label_grid_small(active: u8) -> View {
-    tag(active, 13., 7.5, 3.)
-}
-
-fn tag(active: u8, side: f32, text_size: f32, pad: f32) -> View {
-    let cell = move |n: u8| {
-        let on = n == active;
-        row()
-            .size(side, side)
-            .items_center()
-            .justify_center()
-            .rounded(side / 2.)
-            .border(if on { 1. } else { 0. })
-            .border_color(INK)
-            .child(
-                text(n.to_string())
-                    .font_family(theme::DISPLAY)
-                    .font_weight(if on { weight::BOLD } else { weight::LIGHT })
-                    .text_size(text_size)
-                    .text_color(if on { TEXT } else { TEXT_MUTED }),
-            )
-    };
-    let line = move |from: u8| row().gap(2.).children((from..from + 12).map(cell));
-    column()
+/// A little OS window, as smallfile's and the old Mac's: a 1 pt ink frame,
+/// a striped title bar with the title in a paper box, an optional close box,
+/// and a dithered shadow 5 pt down and right. `content` fills the rest.
+pub fn window(title: impl Into<String>, close: Option<Box<dyn Fn()>>, content: View) -> View {
+    let title = title.into();
+    let mut bar = row()
+        .h(22.)
         .shrink_0()
-        .px(pad + 2.)
-        .py(pad)
-        .gap(1.)
-        .bg(Color(252, 250, 246, 255))
-        .border(1.)
-        .border_color(ink(0.14))
-        .child(line(0))
-        .child(line(12))
+        .relative()
+        .items_center()
+        .justify_center()
+        .border_edges(zgui::scene::Insets {
+            top: 0.,
+            right: 0.,
+            bottom: 1.,
+            left: 0.,
+        })
+        .border_color(INK)
+        .child(
+            dither::patch(dither::stripes(INK))
+                .absolute()
+                .left(3.)
+                .right(3.)
+                .top(5.)
+                .bottom(5.),
+        )
+        .child(
+            row().relative().px(8.).bg(PAPER).child(
+                text(title.to_uppercase())
+                    .font_family(theme::MONO)
+                    .text_size(size::CAPTION)
+                    .font_weight(weight::BOLD)
+                    .letter_spacing(1.)
+                    .text_color(TEXT)
+                    .truncate(),
+            ),
+        );
+    if let Some(close) = close {
+        bar = bar.child(
+            row().absolute().left(9.).top(5.).p(2.).bg(PAPER).child(
+                button()
+                    .size(11., 11.)
+                    .p(0.)
+                    .rounded(0.)
+                    .bg(PAPER)
+                    .border(1.)
+                    .border_color(INK)
+                    .cursor(Cursor::Pointer)
+                    .focus(|s| s.outline(2., ACCENT).outline_offset(2.))
+                    .hover(|s| s.bg(INK))
+                    .accessible_label("Close")
+                    .on_click(close),
+            ),
+        );
+    }
+    column()
+        .relative()
+        .child(
+            dither::patch(dither::checker(INK))
+                .absolute()
+                .left(5.)
+                .top(5.)
+                .right(-5.)
+                .bottom(-5.),
+        )
+        .child(
+            column()
+                .relative()
+                .w_full()
+                .h_full()
+                .bg(PAPER)
+                .border(1.)
+                .border_color(INK)
+                .child(bar)
+                .child(content.grow().min_h(0.)),
+        )
 }
 
-/// Printer's crop marks outside the corners of the view it's added to (a
-/// `relative` one): what frames a plate in a catalogue.
-pub fn crop_marks(color: Color) -> Vec<View> {
-    const LEN: f32 = 14.;
-    const GAP: f32 = 6.;
-    let mut marks = Vec::new();
-    for (left, top) in [(true, true), (false, true), (true, false), (false, false)] {
-        // The horizontal stroke, then the vertical, off each corner.
-        let h = div().absolute().w(LEN).h(1.).bg(color);
-        let v = div().absolute().w(1.).h(LEN).bg(color);
-        let h = if left {
-            h.left(-(LEN + GAP))
-        } else {
-            h.right(-(LEN + GAP))
-        };
-        let h = if top { h.top(0.) } else { h.bottom(0.) };
-        let v = if left { v.left(0.) } else { v.right(0.) };
-        let v = if top {
-            v.top(-(LEN + GAP))
-        } else {
-            v.bottom(-(LEN + GAP))
-        };
-        marks.push(h);
-        marks.push(v);
+/// A meter, as solweb's `.bar`: a 1 pt box, `fraction` of it filled with the
+/// checker, its leading edge a solid line.
+pub fn meter(fraction: impl Fn() -> f32 + Clone + 'static, height: f32) -> View {
+    let (fill, edge) = (fraction.clone(), fraction);
+    div()
+        .w_full()
+        .h(height)
+        .relative()
+        .border(1.)
+        .border_color(INK)
+        .child(
+            dither::patch(dither::checker(INK))
+                .absolute()
+                .left(0.)
+                .top(0.)
+                .bottom(0.)
+                .reactive_style(move || Styles::new().w_percent(fill().clamp(0., 1.) * 100.)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(0.)
+                .bottom(0.)
+                .w(1.)
+                .bg(INK)
+                .reactive_style(move || {
+                    let f = edge().clamp(0., 1.);
+                    Styles::new()
+                        .left(Length::Percent(f))
+                        .opacity(if f > 0.001 && f < 0.999 { 1. } else { 0. })
+                }),
+        )
+}
+
+/// Three small squares, the step under way filled: 01 drop, 02 tune,
+/// 03 compress.
+pub fn steps(active: u8) -> View {
+    let mut r = row().gap(4.).items_center().shrink_0();
+    for n in 1..=3u8 {
+        let mut cell = div().size(7., 7.).border(1.).border_color(INK);
+        if n == active {
+            cell = cell.bg(INK);
+        } else if n < active {
+            cell = cell.style(dither::checker(INK));
+        }
+        r = r.child(cell);
     }
-    marks
+    r.child(
+        text(format!("STEP {active} OF 3"))
+            .ml(4.)
+            .font_family(theme::MONO)
+            .text_size(size::CAPTION)
+            .letter_spacing(1.)
+            .text_color(TEXT_FAINT),
+    )
 }
 
 /// A command to run: monospaced, selectable, and a button that copies it.
@@ -321,19 +435,19 @@ pub fn command(line: &'static str) -> View {
         let tasks = cx.tasks();
         let (show, flag) = (copied.clone(), copied.clone());
         row()
-            .h(34.)
-            .pl(12.)
-            .pr(3.)
+            .h(32.)
+            .pl(10.)
+            .pr(2.)
             .gap(8.)
             .items_center()
             .bg(PAPER)
             .border(1.)
-            .border_color(ink(0.3))
+            .border_color(INK)
             .child(
                 text("$")
                     .font_family(theme::MONO)
                     .text_size(size::SM)
-                    .text_color(ACCENT),
+                    .text_color(TEXT_FAINT),
             )
             .child(
                 row().grow().min_w(0.).selectable(true).child(
@@ -346,30 +460,30 @@ pub fn command(line: &'static str) -> View {
             )
             .child(
                 button()
-                    .size(28., 28.)
+                    .size(26., 26.)
                     .p(0.)
                     .rounded(0.)
                     .border(0.)
                     .items_center()
                     .justify_center()
-                    .bg(ink(0.))
-                    .text_color(TEXT_MUTED)
+                    .bg(PAPER)
+                    .text_color(TEXT)
                     .cursor(Cursor::Pointer)
-                    .focus(|s| s)
-                    .hover(|s| s.bg(ink(0.06)).text_color(TEXT))
+                    .focus(|s| s.outline(2., ACCENT).outline_offset(-3.))
+                    .hover(|s| s.bg(INK).text_color(ON_INK))
                     .accessible_label("Copy command")
                     .child(
                         switch(
                             move || show.get(),
                             |done, _| {
                                 if done {
-                                    icon("check", 13., ACCENT)
+                                    glyph("check", 12.)
                                 } else {
-                                    glyph("copy", 13.)
+                                    glyph("copy", 12.)
                                 }
                             },
                         )
-                        .size(13., 13.),
+                        .size(12., 12.),
                     )
                     .on_click(move || {
                         copy_text(line);
@@ -398,43 +512,20 @@ pub fn copy_text(text: &str) {
     }
 }
 
-/// A live dot: a core and a halo that swells and fades, at Zeron's pulse
-/// rate, only while it is on screen.
+/// A live dot, 1-bit: a small square that blinks, on and off, never fading.
+/// It runs only while on screen.
 pub fn pulse(anim: &Anim, color: Color) -> View {
     let anim = anim.clone();
     component(move |cx| {
         cx.retain(anim.ambient());
         let clock = anim.ambient_clock.clone();
-        let phase = move || (clock.get() / 1.8).fract();
-        let halo = phase.clone();
-        row()
-            .size(10., 10.)
+        div()
+            .size(6., 6.)
             .shrink_0()
-            .relative()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .absolute()
-                    .left(0.)
-                    .top(0.)
-                    .size(10., 10.)
-                    .rounded(5.)
-                    .bg(color)
-                    .reactive_style(move || {
-                        let p = halo();
-                        Styles::new().opacity((1. - p) * 0.35).scale(0.4 + 0.8 * p)
-                    }),
-            )
-            .child(
-                div()
-                    .size(5., 5.)
-                    .rounded(2.5)
-                    .bg(color)
-                    .reactive_style(move || {
-                        let p = phase();
-                        Styles::new().opacity(0.7 + 0.3 * (TAU * p).cos())
-                    }),
-            )
+            .bg(color)
+            .reactive_style(move || {
+                let on = (clock.get() * 1.6).floor() as i64 % 2 == 0;
+                Styles::new().opacity(if on { 1. } else { 0.15 })
+            })
     })
 }
