@@ -25,3 +25,10 @@ tune the settings against a measured estimate, and compress it with ffmpeg.
     <td align="center"><sub>Done: saved beside the original</sub></td>
   </tr>
 </table>
+
+## Install
+
+```sh
+brew install ffmpeg zig@0.16   # ffmpeg does the encoding; Zig builds Ghostty, the log's terminal
+scripts/bundle.sh --install    # builds Compressy.app (and a .dmg in dist/), puts it in /Applications
+```

@@ -2,7 +2,7 @@
 name = "compressy"
 version = "0.1.0"
 edition = "2024"
-description = "Drop a clip in, Claude Code squeezes it as small as it can go."
+description = "Drop a video in, tune it against a measured estimate, and make a small file with ffmpeg."
 publish = false
 
 # zgui is young and moves fast: pinned to the commit this was written against.
